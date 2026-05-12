@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { Fragment } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Database, Columns3, AlertTriangle, Sparkles } from "lucide-react";
 
@@ -93,11 +94,8 @@ function EDA() {
                 </div>
               ))}
               {matrix.map((row, i) => (
-                <>
-                  <div
-                    key={`label-${i}`}
-                    className="flex items-center justify-end pr-3 font-mono text-[11px] text-muted-foreground"
-                  >
+                <Fragment key={`row-${i}`}>
+                  <div className="flex items-center justify-end pr-3 font-mono text-[11px] text-muted-foreground">
                     {COLS[i]}
                   </div>
                   {row.map((v, j) => (
@@ -110,7 +108,7 @@ function EDA() {
                       {v.toFixed(2)}
                     </div>
                   ))}
-                </>
+                </Fragment>
               ))}
             </div>
           </div>
