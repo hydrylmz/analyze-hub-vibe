@@ -5,3 +5,8 @@ numpy
 scikit-learn
 xgboost
 python-multipart
+optuna 
+lightgbm 
+shap
+category-encoders
+scipy
