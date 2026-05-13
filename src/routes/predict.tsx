@@ -1,6 +1,6 @@
 // src/routes/predict.tsx
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Sparkles,
   TrendingUp,
@@ -8,6 +8,7 @@ import {
   AlertCircle,
   Cpu,
   X,
+  Terminal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -46,8 +47,8 @@ type TrainResult = {
   target: string;
   metrics: Record<string, unknown>;
   feature_importance: Record<string, number>;
-  train_rows: number;
-  test_rows: number;
+  train_rows?: number;
+  test_rows?: number;
 };
 
 type PredictResult = {
@@ -55,6 +56,16 @@ type PredictResult = {
   confidence: number | null;
   feature_importance: Record<string, number>;
 };
+
+type LogLine = {
+  ts: string;
+  level: "info" | "success" | "error" | "warn";
+  msg: string;
+};
+
+function timestamp() {
+  return new Date().toLocaleTimeString("en-GB", { hour12: false });
+}
 
 function Predict() {
   const navigate = useNavigate();
@@ -74,6 +85,21 @@ function Predict() {
 
   const [error, setError] = useState<string | null>(null);
 
+  // Log state
+  const [logs, setLogs] = useState<LogLine[]>([]);
+  const logRef = useRef<HTMLDivElement>(null);
+
+  const pushLog = (msg: string, level: LogLine["level"] = "info") => {
+    setLogs((prev) => [...prev, { ts: timestamp(), level, msg }]);
+  };
+
+  // Auto-scroll log to bottom
+  useEffect(() => {
+    if (logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [logs]);
+
   useEffect(() => { setStore(getStore()); }, []);
 
   const addExclude = (col: string) => {
@@ -88,22 +114,96 @@ function Predict() {
 
   const onTrain = async () => {
     if (!target) return;
-    setTraining(true); setError(null); setTrainResult(null); setResult(null);
+    setTraining(true);
+    setError(null);
+    setTrainResult(null);
+    setResult(null);
+    setLogs([]);
+
+    pushLog(`Starting training  →  target: "${target}"${excluded.length ? `  excluded: [${excluded.join(", ")}]` : ""}`);
+
     try {
+      // 1. Start training
       const res = await fetch(`${API_URL}/train`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target, exclude: excluded }),
+        body: JSON.stringify({ target, exclude: excluded, n_trials: 20, time_limit: 120 }),
       });
-      if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? "Train hatası"); }
-      setTrainResult(await res.json());
+      if (!res.ok) {
+        const e = await res.json();
+        throw new Error(e.detail ?? "Train error");
+      }
+      pushLog("Training job accepted  ·  polling /train/status every 2 s…");
+
+      // 2. Poll /train/status
+      let done = false;
+      let lastTrials = -1;
+      while (!done) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const statusRes = await fetch(`${API_URL}/train/status`);
+        const status = await statusRes.json();
+
+        // Log trial progress when it changes
+        if (
+          typeof status.trials_completed === "number" &&
+          status.trials_completed !== lastTrials
+        ) {
+          lastTrials = status.trials_completed;
+          pushLog(`Optuna  →  ${status.trials_completed} trial${status.trials_completed !== 1 ? "s" : ""} completed`);
+        }
+
+        if (status.status === "done") {
+          done = true;
+          pushLog("Hyperparameter search complete  ·  retraining on full dataset…");
+        } else if (status.status === "error") {
+          throw new Error(status.error ?? "Training failed");
+        } else if (status.status === "cancelled") {
+          throw new Error("Training was cancelled");
+        }
+      }
+
+      // 3. Fetch metrics
+      const metricsRes = await fetch(`${API_URL}/metrics`);
+      if (!metricsRes.ok) throw new Error("Could not fetch metrics");
+      const metricsData = await metricsRes.json();
+
+      const metricStr = Object.entries(metricsData.metrics as Record<string, unknown>)
+        .filter(([k]) => k !== "classes")
+        .map(([k, v]) => `${k}: ${v}`)
+        .join("  ·  ");
+
+      pushLog(`Task detected: ${metricsData.task}`);
+      pushLog(`Cross-validation  →  ${metricStr}`, "success");
+
+      const topFeatures = Object.entries(metricsData.feature_importance as Record<string, number>)
+        .slice(0, 3)
+        .map(([k, v]) => `${k} (${v})`)
+        .join(", ");
+      if (topFeatures) pushLog(`Top features  →  ${topFeatures}`);
+
+      pushLog("Model ready ✓", "success");
+
+      setTrainResult({
+        task: metricsData.task,
+        target: metricsData.target,
+        metrics: metricsData.metrics,
+        feature_importance: metricsData.feature_importance,
+        train_rows: 0,
+        test_rows: 0,
+      });
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Backend bağlantısı yok.");
-    } finally { setTraining(false); }
+      const msg = e instanceof Error ? e.message : "Backend connection failed.";
+      pushLog(msg, "error");
+      setError(msg);
+    } finally {
+      setTraining(false);
+    }
   };
 
   const onPredict = async () => {
-    setPredicting(true); setError(null); setResult(null);
+    setPredicting(true);
+    setError(null);
+    setResult(null);
     try {
       const res = await fetch(`${API_URL}/predict`, {
         method: "POST",
@@ -129,7 +229,6 @@ function Predict() {
 
   const { headers, numericCols, categoricalCols, rows, fileName } = store;
 
-  // Hedef ve exclude edilenler dışındaki kolonlar input olarak gösterilir
   const inputHeaders = trainResult
     ? headers.filter((h) => h !== trainResult.target && !excluded.includes(h))
     : headers;
@@ -140,10 +239,16 @@ function Predict() {
     categoricalOptions[col] = [...new Set(rows.map((r) => r[idx]).filter(Boolean))].slice(0, 20);
   });
 
-  // Target ve zaten excluded olanlar hariç exclude edilebilir kolonlar
   const excludableHeaders = headers.filter(
     (h) => h !== target && !excluded.includes(h)
   );
+
+  const levelColor: Record<LogLine["level"], string> = {
+    info:    "text-muted-foreground",
+    success: "text-green-500 dark:text-green-400",
+    error:   "text-destructive",
+    warn:    "text-yellow-500 dark:text-yellow-400",
+  };
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 p-6">
@@ -158,18 +263,17 @@ function Predict() {
         </div>
       )}
 
-      {/* ADIM 1: Train */}
+      {/* STEP 1: Train */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Cpu className="h-4 w-4 text-primary" />Step 1 — Train model
           </CardTitle>
           <CardDescription>
-            Hedef kolonu seç, gereksiz kolonları çıkar, modeli eğit.
+            Select a target column, exclude any irrelevant columns, then train.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Target + Train butonu */}
           <div className="flex flex-wrap items-end gap-4">
             <div className="flex-1 space-y-2 min-w-[180px]">
               <Label className="text-xs uppercase tracking-wider text-muted-foreground">
@@ -192,11 +296,10 @@ function Predict() {
             </Button>
           </div>
 
-          {/* Exclude kolonlar */}
           {target && (
             <div className="space-y-2">
               <Label className="text-xs uppercase tracking-wider text-muted-foreground">
-                Exclude columns (leakage, ID, gereksiz)
+                Exclude columns
               </Label>
               <div className="flex flex-wrap gap-2">
                 {excluded.map((col) => (
@@ -235,18 +338,17 @@ function Predict() {
             </div>
           )}
 
-          {/* Train sonucu */}
           {trainResult && (
             <div className="rounded-md border border-border bg-muted/30 p-4 text-sm space-y-2">
               <p className="font-medium text-foreground">
-                ✅ Model eğitildi — <span className="font-mono text-primary">{trainResult.task}</span>
+                ✅ Model trained — <span className="font-mono text-primary">{trainResult.task}</span>
               </p>
               <div className="flex flex-wrap gap-4 text-xs text-muted-foreground font-mono">
-                {Object.entries(trainResult.metrics).map(([k, v]) => (
-                  <span key={k}>{k}: <strong className="text-foreground">{String(v)}</strong></span>
-                ))}
-                <span>train rows: <strong className="text-foreground">{trainResult.train_rows}</strong></span>
-                <span>test rows: <strong className="text-foreground">{trainResult.test_rows}</strong></span>
+                {Object.entries(trainResult.metrics)
+                  .filter(([k]) => k !== "classes")
+                  .map(([k, v]) => (
+                    <span key={k}>{k}: <strong className="text-foreground">{String(v)}</strong></span>
+                  ))}
               </div>
               {Object.keys(trainResult.feature_importance).length > 0 && (
                 <ul className="space-y-0.5 font-mono text-xs">
@@ -262,17 +364,59 @@ function Predict() {
         </CardContent>
       </Card>
 
-      {/* ADIM 2: Predict */}
+      {/* Training log */}
+      {logs.length > 0 && (
+        <Card className="overflow-hidden">
+          <CardHeader className="pb-2 pt-4 px-4">
+            <CardTitle className="flex items-center gap-2 text-sm font-medium">
+              <Terminal className="h-3.5 w-3.5 text-primary" />
+              Training log
+              {training && (
+                <span className="ml-auto flex items-center gap-1.5 text-xs font-normal text-muted-foreground">
+                  <span className="relative flex h-2 w-2">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-60" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
+                  </span>
+                  live
+                </span>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-0 pb-0">
+            <div
+              ref={logRef}
+              className="h-48 overflow-y-auto bg-muted/40 px-4 py-3 font-mono text-xs leading-relaxed"
+              aria-live="polite"
+              aria-label="Training log output"
+            >
+              {logs.map((line, i) => (
+                <div key={i} className="flex gap-3">
+                  <span className="shrink-0 select-none text-muted-foreground/50">{line.ts}</span>
+                  <span className={levelColor[line.level]}>{line.msg}</span>
+                </div>
+              ))}
+              {training && (
+                <div className="flex gap-3 mt-0.5">
+                  <span className="shrink-0 select-none text-muted-foreground/50">{timestamp()}</span>
+                  <span className="text-muted-foreground animate-pulse">waiting…</span>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* STEP 2: Predict */}
       {trainResult && (
         <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
           <Card>
             <CardHeader>
               <CardTitle>Step 2 — Input features</CardTitle>
               <CardDescription>
-                Hedef: <span className="font-mono text-primary">{trainResult.target}</span>
+                Target: <span className="font-mono text-primary">{trainResult.target}</span>
                 {excluded.length > 0 && (
                   <span className="ml-2 text-muted-foreground">
-                    · {excluded.length} kolon exclude edildi
+                    · {excluded.length} column{excluded.length !== 1 ? "s" : ""} excluded
                   </span>
                 )}
               </CardDescription>
