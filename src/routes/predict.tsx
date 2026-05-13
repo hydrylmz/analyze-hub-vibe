@@ -76,6 +76,7 @@ function Predict() {
   const [excluded, setExcluded] = useState<string[]>([]);
   const [excludeCol, setExcludeCol] = useState<string>("");
   const [training, setTraining] = useState(false);
+  const [nTrials, setNTrials] = useState(20);
   const [trainResult, setTrainResult] = useState<TrainResult | null>(null);
 
   // Predict state
@@ -127,7 +128,7 @@ function Predict() {
       const res = await fetch(`${API_URL}/train`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target, exclude: excluded, n_trials: 20, time_limit: 120 }),
+        body: JSON.stringify({ target, exclude: excluded, n_trials: nTrials, time_limit: nTrials * 30 }),
       });
       if (!res.ok) {
         const e = await res.json();
@@ -291,10 +292,25 @@ function Predict() {
                 </SelectContent>
               </Select>
             </div>
+
+            <div className="space-y-2 min-w-[120px]">
+              <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+                Trials <span className="normal-case text-muted-foreground/60">(more = better but slower)</span>
+              </Label>
+              <Input
+                type="number"
+                min={5}
+                max={500}
+                value={nTrials}
+                onChange={(e) => setNTrials(Number(e.target.value))}
+              />
+            </div>
             <Button onClick={onTrain} disabled={!target || training} className="gap-2">
               <Cpu className="h-4 w-4" />{training ? "Training…" : "Train"}
             </Button>
           </div>
+          
+          
 
           {target && (
             <div className="space-y-2">

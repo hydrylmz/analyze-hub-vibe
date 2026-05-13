@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as ResultsRouteImport } from './routes/results'
 import { Route as PredictRouteImport } from './routes/predict'
 import { Route as EdaRouteImport } from './routes/eda'
+import { Route as BatchRouteImport } from './routes/batch'
 import { Route as IndexRouteImport } from './routes/index'
 
 const ResultsRoute = ResultsRouteImport.update({
@@ -29,6 +30,11 @@ const EdaRoute = EdaRouteImport.update({
   path: '/eda',
   getParentRoute: () => rootRouteImport,
 } as any)
+const BatchRoute = BatchRouteImport.update({
+  id: '/batch',
+  path: '/batch',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -37,12 +43,14 @@ const IndexRoute = IndexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/batch': typeof BatchRoute
   '/eda': typeof EdaRoute
   '/predict': typeof PredictRoute
   '/results': typeof ResultsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/batch': typeof BatchRoute
   '/eda': typeof EdaRoute
   '/predict': typeof PredictRoute
   '/results': typeof ResultsRoute
@@ -50,20 +58,22 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/batch': typeof BatchRoute
   '/eda': typeof EdaRoute
   '/predict': typeof PredictRoute
   '/results': typeof ResultsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/eda' | '/predict' | '/results'
+  fullPaths: '/' | '/batch' | '/eda' | '/predict' | '/results'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/eda' | '/predict' | '/results'
-  id: '__root__' | '/' | '/eda' | '/predict' | '/results'
+  to: '/' | '/batch' | '/eda' | '/predict' | '/results'
+  id: '__root__' | '/' | '/batch' | '/eda' | '/predict' | '/results'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  BatchRoute: typeof BatchRoute
   EdaRoute: typeof EdaRoute
   PredictRoute: typeof PredictRoute
   ResultsRoute: typeof ResultsRoute
@@ -92,6 +102,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof EdaRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/batch': {
+      id: '/batch'
+      path: '/batch'
+      fullPath: '/batch'
+      preLoaderRoute: typeof BatchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -104,6 +121,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  BatchRoute: BatchRoute,
   EdaRoute: EdaRoute,
   PredictRoute: PredictRoute,
   ResultsRoute: ResultsRoute,

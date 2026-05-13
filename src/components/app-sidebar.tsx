@@ -1,5 +1,5 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { Upload, BarChart3, Sparkles, History, Database } from "lucide-react";
+import { Upload, BarChart3, Sparkles, History, Database, Layers } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -13,11 +13,13 @@ import {
   SidebarFooter,
 } from "@/components/ui/sidebar";
 
+
 const items = [
-  { title: "Upload", url: "/", icon: Upload },
-  { title: "EDA", url: "/eda", icon: BarChart3 },
-  { title: "Predict", url: "/predict", icon: Sparkles },
-  { title: "Results", url: "/results", icon: History },
+  { title: "Upload",       url: "/",       icon: Upload },
+  { title: "EDA",          url: "/eda",    icon: BarChart3 },
+  { title: "Predict",      url: "/predict", icon: Sparkles },
+  { title: "Batch Predict", url: "/batch", icon: Layers },   // ← bunu ekle
+  { title: "Results",      url: "/results", icon: History },
 ];
 
 export function AppSidebar() {
