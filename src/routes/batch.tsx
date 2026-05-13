@@ -392,7 +392,7 @@ function BatchPredict() {
               >
                 <div className="mb-1 flex items-center gap-2">
                   <Settings2 className="h-4 w-4 text-primary" />
-                  <span className="text-sm font-medium">Özel Seçim</span>
+                  <span className="text-sm font-medium">Custom Selection</span>
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Choose which original columns to include + prediction + confidence

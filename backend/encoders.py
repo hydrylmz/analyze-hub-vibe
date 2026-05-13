@@ -148,7 +148,7 @@ def predict_row_fast(row_dict: dict, state: dict) -> np.ndarray:
     date_cols        = state.get("date_cols")
     frequent_cats    = state.get("frequent_cats")
 
-    row = pd.DataFrame([row_dict]).replace("NA", np.nan)
+    row = pd.DataFrame([row_dict]).replace(["NA", ""], np.nan)
     
     if date_cols:
         row, _ = parse_dates(row, date_cols=date_cols)
@@ -191,7 +191,7 @@ def predict_batch_fast(rows: list[dict], state: dict) -> np.ndarray:
     date_cols        = state.get("date_cols")
     frequent_cats    = state.get("frequent_cats")
 
-    df = pd.DataFrame(rows).replace("NA", np.nan)
+    df = pd.DataFrame(rows).replace(["NA", ""], np.nan)
     
     if date_cols:
         df, _ = parse_dates(df, date_cols=date_cols)
