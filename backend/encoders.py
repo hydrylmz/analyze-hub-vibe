@@ -8,8 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from sklearn.experimental import enable_iterative_imputer  # noqa: F401
-from sklearn.impute import IterativeImputer
+from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import OrdinalEncoder
 
 from preprocessing import (
@@ -46,7 +45,7 @@ def encode_features(
     num_cols: list[str] | None = None,
     high_card_cols: list[str] | None = None,
     low_card_cols: list[str] | None = None,
-    num_imputer: IterativeImputer | None = None,
+    num_imputer: SimpleImputer | None = None,
     fit: bool = True,
     high_card_threshold: int = 20,
 ) -> tuple:
@@ -76,7 +75,7 @@ def encode_features(
     X_num = X[num_cols].copy() if num_cols else pd.DataFrame(index=X.index)
     if num_cols:
         if fit:
-            num_imputer = IterativeImputer(max_iter=5, random_state=42, skip_complete=True)
+            num_imputer = SimpleImputer(strategy="median")
             X_num_arr = num_imputer.fit_transform(X_num)
         else:
             X_num_arr = num_imputer.transform(X_num)

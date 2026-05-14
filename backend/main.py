@@ -157,6 +157,10 @@ def train(req: TrainRequest, background_tasks: BackgroundTasks):
             raise HTTPException(409, "Training already in progress. Cancel first.")
         STATE["train_status"] = "running"
 
+    df_rows = len(STATE["df"])
+    df_cols = len(STATE["df"].columns)
+    log.info(f"Training request received: {df_rows} rows, {df_cols} columns. Target: {req.target}")
+
     background_tasks.add_task(
         run_training,
         req.target, req.exclude, req.n_trials, req.time_limit,

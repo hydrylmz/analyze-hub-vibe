@@ -205,6 +205,18 @@ def run_training(
             X_arr[:, len(num_cols):]
         ]).astype(np.float32)
 
+        # ── 9.5 Subsample for HPO if dataset is very large ────────────────────
+        # For datasets > 100k rows, HPO trials are too slow. Subsample for HPO.
+        # We still use the full dataset for the final model fit.
+        if len(X_hpo) > 100_000:
+            log.info(f"Subsampling HPO data from {len(X_hpo)} to 100,000 rows for speed.")
+            indices = np.random.choice(len(X_hpo), 100_000, replace=False)
+            X_hpo_sub = X_hpo[indices]
+            y_hpo_sub = y[indices]
+        else:
+            X_hpo_sub = X_hpo
+            y_hpo_sub = y
+
         # ── 10. Optuna study ──────────────────────────────────────────────────
         def objective(trial: optuna.Trial) -> float:
             with lock:
@@ -215,17 +227,17 @@ def run_training(
             pipe  = make_hpo_pipeline(model, num_cols)
 
             if task == "regression":
-                cv = KFold(n_splits=5, shuffle=True, random_state=42)
+                cv = KFold(n_splits=3, shuffle=True, random_state=42)
                 scores = cross_val_score(
-                    pipe, X_hpo, y, cv=cv,
-                    scoring="neg_mean_absolute_error", n_jobs=-1,
+                    pipe, X_hpo_sub, y_hpo_sub, cv=cv,
+                    scoring="neg_mean_absolute_error", n_jobs=1,
                 )
                 return float(-scores.mean())
             else:
-                cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+                cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
                 scores = cross_val_score(
-                    pipe, X_hpo, y, cv=cv,
-                    scoring="neg_log_loss", n_jobs=-1,
+                    pipe, X_hpo_sub, y_hpo_sub, cv=cv,
+                    scoring="neg_log_loss", n_jobs=1,
                 )
                 return float(-scores.mean())
 
@@ -281,50 +293,93 @@ def run_training(
                 **({"sample_weight": sw_tr} if sw_tr is not None else {}),
             )
 
-        # ── 12. Cross-val metrics on full data ────────────────────────────────
-        pipe_final = Pipeline([
-            ("imputer", SimpleImputer(strategy="median")),
-            ("model",   build_model_for_trial(best_trial, task, n_classes)),
-        ])
+        # ── 12. Evaluation Metrics ────────────────────────────────────────────
+        # For large datasets, 5-fold CV on full data is too slow. Use holdout (X_val).
+        if len(X_arr) > 50_000:
+            log.info(f"Using holdout set (10%) for final metrics (dataset size={len(X_arr)})")
+            y_pred = final_model.predict(X_val)
+            
+            if task == "regression":
+                from sklearn.metrics import mean_absolute_error, r2_score
+                mae_transformed = mean_absolute_error(y_val, y_pred)
+                r2 = r2_score(y_val, y_pred)
+                
+                if inverse_fn is not None:
+                    mae_display = round(float(np.expm1(mae_transformed)), 4)
+                    mae_label   = "holdout_mae_orig_scale"
+                else:
+                    mae_display = round(mae_transformed, 4)
+                    mae_label   = "holdout_mae"
 
-        if task == "regression":
-            cv = KFold(n_splits=5, shuffle=True, random_state=42)
-            cv_mae_scores = cross_val_score(pipe_final, X_hpo, y, cv=cv,
-                                            scoring="neg_mean_absolute_error", n_jobs=-1)
-            cv_r2_scores  = cross_val_score(pipe_final, X_hpo, y, cv=cv,
-                                            scoring="r2", n_jobs=-1)
-
-            # Report MAE in original scale when log1p was applied
-            mae_transformed = float(-cv_mae_scores.mean())
-            if inverse_fn is not None:
-                # Approximate original-scale MAE via a representative inverse
-                mae_display = round(float(np.expm1(mae_transformed)), 4)
-                mae_label   = "cv_mae_orig_scale"
+                metrics = {
+                    mae_label:      mae_display,
+                    "holdout_r2":   round(float(r2), 4),
+                    "target_transform": target_transform_name,
+                }
+                cv_scores_list = [mae_transformed]
             else:
-                mae_display = round(mae_transformed, 4)
-                mae_label   = "cv_mae"
-
-            metrics = {
-                mae_label:      mae_display,
-                "cv_mae_std":   round(float(cv_mae_scores.std()), 4),
-                "cv_r2":        round(float(cv_r2_scores.mean()), 4),
-                "target_transform": target_transform_name,
-            }
-            cv_scores_list = (-cv_mae_scores).tolist()
-
+                from sklearn.metrics import accuracy_score, log_loss
+                y_proba = final_model.predict_proba(X_val)
+                acc = accuracy_score(y_val, y_pred)
+                ll = log_loss(y_val, y_proba)
+                
+                metrics = {
+                    "holdout_accuracy": round(float(acc), 4),
+                    "holdout_log_loss": round(float(ll), 4),
+                    "classes":          list(le.classes_.astype(str)) if le else [],
+                }
+                cv_scores_list = [acc]
         else:
-            cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-            cv_acc = cross_val_score(pipe_final, X_hpo, y, cv=cv,
-                                     scoring="accuracy", n_jobs=-1)
-            cv_ll  = cross_val_score(pipe_final, X_hpo, y, cv=cv,
-                                     scoring="neg_log_loss", n_jobs=-1)
-            metrics = {
-                "cv_accuracy":     round(float(cv_acc.mean()), 4),
-                "cv_accuracy_std": round(float(cv_acc.std()),  4),
-                "cv_log_loss":     round(float(-cv_ll.mean()), 4),
-                "classes":         list(le.classes_.astype(str)) if le else [],
-            }
-            cv_scores_list = cv_acc.tolist()
+            # For small datasets, 5-fold CV is fine and more robust
+            from sklearn.model_selection import cross_validate
+            pipe_final = Pipeline([
+                ("imputer", SimpleImputer(strategy="median")),
+                ("model",   build_model_for_trial(best_trial, task, n_classes)),
+            ])
+            if task == "regression":
+                cv = KFold(n_splits=5, shuffle=True, random_state=42)
+                cv_results = cross_validate(
+                    pipe_final, X_hpo, y, cv=cv,
+                    scoring=["neg_mean_absolute_error", "r2"],
+                    n_jobs=1
+                )
+                cv_mae_scores = cv_results["test_neg_mean_absolute_error"]
+                cv_r2_scores = cv_results["test_r2"]
+
+                mae_transformed = float(-cv_mae_scores.mean())
+                if inverse_fn is not None:
+                    mae_display = round(float(np.expm1(mae_transformed)), 4)
+                    mae_label   = "cv_mae_orig_scale"
+                else:
+                    mae_display = round(mae_transformed, 4)
+                    mae_label   = "cv_mae"
+
+                metrics = {
+                    mae_label:      mae_display,
+                    "cv_mae_std":   round(float(cv_mae_scores.std()), 4),
+                    "cv_r2":        round(float(cv_r2_scores.mean()), 4),
+                    "target_transform": target_transform_name,
+                }
+                cv_scores_list = (-cv_mae_scores).tolist()
+
+            else:
+                cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+                cv_results = cross_validate(
+                    pipe_final, X_hpo, y, cv=cv,
+                    scoring=["accuracy", "neg_log_loss"],
+                    n_jobs=1
+                )
+                cv_acc = cv_results["test_accuracy"]
+                cv_ll  = cv_results["test_neg_log_loss"]
+                
+                metrics = {
+                    "cv_accuracy":     round(float(cv_acc.mean()), 4),
+                    "cv_accuracy_std": round(float(cv_acc.std()),  4),
+                    "cv_log_loss":     round(float(-cv_ll.mean()), 4),
+                    "classes":         list(le.classes_.astype(str)) if le else [],
+                }
+                cv_scores_list = cv_acc.tolist()
+
 
         # ── 13. SHAP importance ───────────────────────────────────────────────
         feat_imp = shap_importance(final_model, X_arr, col_names)
